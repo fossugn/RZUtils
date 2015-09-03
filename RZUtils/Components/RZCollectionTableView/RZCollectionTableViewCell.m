@@ -24,6 +24,8 @@
 
 @property (nonatomic, weak) UIPanGestureRecognizer *panGesture;
 
+@property (nonatomic, assign) BOOL isOSLessThaniOS8;
+@property (nonatomic, assign) BOOL editingButtonPressed;
 @end
 
 @interface RZCollectionTableViewCellEditingItem ()
@@ -46,6 +48,7 @@
 {
     self = [super initWithFrame:frame];
     if ( self ) {
+        [self configureOSDependency];
         [self createHostViews];
         [self configureGestures];
     }
@@ -56,6 +59,8 @@
 {
     self = [super initWithCoder:aDecoder];
     if ( self ) {
+        
+        [self configureOSDependency];
         [self createHostViews];
         [self configureGestures];
         [self moveSubviewsToSwipeableContainer];
@@ -72,24 +77,46 @@
 }
 
 #pragma mark - Config
+- (void)configureOSDependency {
+    if ([[[UIDevice currentDevice] systemVersion] floatValue] < 8.0) {
+        self.isOSLessThaniOS8 = YES;
+    } else {
+        self.isOSLessThaniOS8 = NO;
+    }
+}
 
 - (void)createHostViews
 {
+    self.editingButtonPressed = YES;
+    
     UIView *editingButtonView = [[UIView alloc] initWithFrame:self.contentView.bounds];
     editingButtonView.backgroundColor  = self.backgroundColor;
     editingButtonView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.contentView addSubview:editingButtonView];
+    
+    if (self.isOSLessThaniOS8) {
+        [self addSubview:editingButtonView];
+    } else {
+        [self.contentView addSubview:editingButtonView];
+    }
     self.editingButtonsHostView = editingButtonView;
+    
 
     UIView *swipeView = [[UIView alloc] initWithFrame:self.contentView.bounds];
     swipeView.backgroundColor  = self.backgroundColor;
     swipeView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.contentView addSubview:swipeView];
+    
+    if (self.isOSLessThaniOS8) {
+        swipeView.backgroundColor = [UIColor clearColor];
+        [self bringSubviewToFront:self.contentView];
+    }
     self.swipeableContentHostView = swipeView;
 }
 
 - (void)moveSubviewsToSwipeableContainer
 {
+    if (self.isOSLessThaniOS8) { return; }
+    
     // move all of content view's subviews to the pannable container
     NSArray *subviews = [[self.contentView subviews] copy];
     [subviews enumerateObjectsUsingBlock:^(UIView *sv, NSUInteger idx, BOOL *stop) {
@@ -122,6 +149,7 @@
             if ( [self.swipeableContentHostView.subviews containsObject:constraint.secondItem] ) {
                 // copy constraint, change first view to content view
                 [self removeConstraint:constraint];
+
                 [self addConstraint:[NSLayoutConstraint constraintWithItem:self.swipeableContentHostView
                                                                  attribute:constraint.firstAttribute
                                                                  relatedBy:constraint.relation
@@ -233,7 +261,9 @@
 {
     NSInteger idx = [self.editingButtons indexOfObject:button];
     if ( idx != NSNotFound ) {
+        self.editingButtonPressed = YES;
         [self._rz_parentCollectionTableView _rz_editingButtonPressed:idx forCell:self];
+        
     }
 }
 
@@ -255,6 +285,9 @@
         _rzEditingEnabled = rzEditingEnabled;
         self.panGesture.enabled = rzEditingEnabled;
     }
+    if (self.isOSLessThaniOS8) {
+        self.swipeableContentHostView.userInteractionEnabled = _rzEditingEnabled;
+    }
 }
 
 - (void)setRzEditing:(BOOL)editing
@@ -265,20 +298,30 @@
 - (void)setRzEditing:(BOOL)editing animated:(BOOL)animated
 {
     _rzEditing = editing;
-
-    self.swipeableContentHostView.userInteractionEnabled = !editing;
+    if (self.editingButtonPressed) {
+        self.editingButtonPressed = !editing;
+    }
+    __block UIView *movableView = self.swipeableContentHostView;
+    if (self.isOSLessThaniOS8) {
+        movableView = self.contentView;
+    }
+    
+    movableView.userInteractionEnabled = !editing;
 
     CGFloat stopTarget = editing ? ( -kRZCTEditingButtonWidth * self.rzEditingItems.count ) : 0;
-    if ( animated ) {
+    if (( animated ) && (!self.editingButtonPressed)) {
+        
         [UIView animateWithDuration:kRZCTEditStateAnimDuration
                               delay:0.0
                             options:UIViewAnimationOptionCurveEaseOut
                          animations:^{
-            self.swipeableContentHostView.transform = CGAffineTransformMakeTranslation(stopTarget, 0);
+                             
+            movableView.transform = CGAffineTransformMakeTranslation(stopTarget, 0);
+                             
         } completion:nil];
     }
     else {
-        self.swipeableContentHostView.transform = CGAffineTransformMakeTranslation(stopTarget, 0);
+        movableView.transform = CGAffineTransformMakeTranslation(stopTarget, 0);
     }
 
     [self._rz_parentCollectionTableView _rz_editingStateChangedForCell:self];
@@ -309,8 +352,13 @@
 {
     static CGFloat initialTranslationX = 0;
 
+    UIView *movableView = self.swipeableContentHostView;
+    if (self.isOSLessThaniOS8) {
+        movableView = self.contentView;
+    }
+    
     CGPoint           translation      = [panGesture translationInView:self];
-    CGAffineTransform currentTransform = self.swipeableContentHostView.transform;
+    CGAffineTransform currentTransform = movableView.transform;
     CGFloat           maxTransX        = -kRZCTEditingButtonWidth * self.rzEditingItems.count;
 
     switch ( panGesture.state ) {
@@ -328,13 +376,14 @@
                 CGFloat overshoot = maxTransX - targetTranslationX;
                 targetTranslationX = maxTransX - overshoot * 0.3333;
             }
-
-            self.swipeableContentHostView.transform = CGAffineTransformMakeTranslation(targetTranslationX, 0);
+            
+            movableView.transform = CGAffineTransformMakeTranslation(targetTranslationX, 0);
         }
             break;
 
         case UIGestureRecognizerStateEnded:
         case UIGestureRecognizerStateCancelled: {
+            
             if ( currentTransform.tx < maxTransX ) {
                 [self setRzEditing:YES animated:YES];
             }
@@ -364,6 +413,7 @@
     else if ( [super respondsToSelector:@selector(gestureRecognizerShouldBegin:)] ) {
         shouldBegin = [super gestureRecognizerShouldBegin:gestureRecognizer];
     }
+
     return shouldBegin;
 }
 
